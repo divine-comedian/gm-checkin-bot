@@ -1,0 +1,48 @@
+name: Build and Test Docker
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Docker image
+        run: docker build -t ${{ github.repository }}:latest .
+
+      - name: Run bot in Docker (env from secrets)
+        run: |
+          docker run --rm \
+            -e DISCORD_BOT_TOKEN="${{ secrets.DISCORD_BOT_TOKEN }}" \
+            -e DISCORD_APPLICATION_ID="${{ secrets.DISCORD_APPLICATION_ID }}" \
+            -e DISCORD_PUBLIC_KEY="${{ secrets.DISCORD_PUBLIC_KEY }}" \
+            -e DISCORD_GUILD_ID="${{ secrets.DISCORD_GUILD_ID }}" \
+            -e GOOGLE_TYPE="${{ secrets.GOOGLE_TYPE }}" \
+            -e GOOGLE_PROJECT_ID="${{ secrets.GOOGLE_PROJECT_ID }}" \
+            -e GOOGLE_PRIVATE_KEY_ID="${{ secrets.GOOGLE_PRIVATE_KEY_ID }}" \
+            -e GOOGLE_PRIVATE_KEY="${{ secrets.GOOGLE_PRIVATE_KEY }}" \
+            -e GOOGLE_CLIENT_EMAIL="${{ secrets.GOOGLE_CLIENT_EMAIL }}" \
+            -e GOOGLE_CLIENT_ID="${{ secrets.GOOGLE_CLIENT_ID }}" \
+            -e GOOGLE_AUTH_URI="${{ secrets.GOOGLE_AUTH_URI }}" \
+            -e GOOGLE_TOKEN_URI="${{ secrets.GOOGLE_TOKEN_URI }}" \
+            -e GOOGLE_AUTH_PROVIDER_X509_CERT_URL="${{ secrets.GOOGLE_AUTH_PROVIDER_X509_CERT_URL }}" \
+            -e GOOGLE_CLIENT_X509_CERT_URL="${{ secrets.GOOGLE_CLIENT_X509_CERT_URL }}" \
+            -e GOOGLE_UNIVERSE_DOMAIN="${{ secrets.GOOGLE_UNIVERSE_DOMAIN }}" \
+            ${{ github.repository }}:latest
+      # Optionally, run your app or tests here
+      # - name: Run tests
+      #   run: docker run --rm ${{ github.repository }}:latest pytest
