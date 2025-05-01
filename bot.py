@@ -9,6 +9,20 @@ import asyncio
 import json
 
 GROUPS_FILE = "groups.json"
+AUTHORIZED_USERS_FILE = "authorized_users.json"
+
+def load_authorized_users():
+    if os.path.exists(AUTHORIZED_USERS_FILE):
+        with open(AUTHORIZED_USERS_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("users", [])
+    return []
+
+def save_authorized_users(users):
+    with open(AUTHORIZED_USERS_FILE, "w") as f:
+        json.dump({"users": users}, f)
+
+authorized_users = load_authorized_users()
 
 def load_groups():
     if os.path.exists(GROUPS_FILE):
@@ -95,7 +109,7 @@ def get_gsheet(tab_name):
 
 @tree.command(name="developer_checkin", description="Send the developer check-in message to all developers (admin only)")
 async def developer_checkin_slash(interaction: discord.Interaction):
-    if not is_admin(interaction):
+    if not is_authorized(interaction):
         await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
         return
     # Defer so we can send a followup after DMing users
@@ -113,7 +127,7 @@ async def developer_checkin_slash(interaction: discord.Interaction):
 
 @tree.command(name="pm_checkin", description="Send the product manager check-in message to all PMs (admin only)")
 async def pm_checkin_slash(interaction: discord.Interaction):
-    if not is_admin(interaction):
+    if not is_authorized(interaction):
         await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
         return
     # Defer so we can send a followup after DMing users
@@ -191,8 +205,11 @@ async def on_message(message):
 
 # Slash commands (application commands) for group management and check-in customization
 
-def is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.guild_permissions.administrator
+def is_authorized(interaction: discord.Interaction) -> bool:
+    return (
+        interaction.user.guild_permissions.administrator or
+        interaction.user.id in authorized_users
+    )
 
 
 
@@ -201,6 +218,53 @@ def is_admin(interaction: discord.Interaction) -> bool:
 from typing import Literal
 
 # --- Slash Command: Set Check-in Message (with dropdown) ---
+
+# --- Slash Command: Add Authorized User ---
+@tree.command(name="add_authorized_user", description="Add a user as an authorized command user (admin only)")
+@app_commands.describe(user="User to authorize")
+async def add_authorized_user_slash(interaction: discord.Interaction, user: discord.User):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Only admins can add authorized users.", ephemeral=True)
+        return
+    if user.id in authorized_users:
+        await interaction.response.send_message(f"{user.mention} is already authorized.", ephemeral=True)
+        return
+    authorized_users.append(user.id)
+    save_authorized_users(authorized_users)
+    await interaction.response.send_message(f"{user.mention} added as an authorized user.", ephemeral=True)
+
+# --- Slash Command: Remove Authorized User ---
+@tree.command(name="remove_authorized_user", description="Remove a user from authorized command users (admin only)")
+@app_commands.describe(user="User to de-authorize")
+async def remove_authorized_user_slash(interaction: discord.Interaction, user: discord.User):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Only admins can remove authorized users.", ephemeral=True)
+        return
+    if user.id not in authorized_users:
+        await interaction.response.send_message(f"{user.mention} is not an authorized user.", ephemeral=True)
+        return
+    authorized_users.remove(user.id)
+    save_authorized_users(authorized_users)
+    await interaction.response.send_message(f"{user.mention} removed from authorized users.", ephemeral=True)
+
+# --- Slash Command: List Authorized Users ---
+@tree.command(name="list_authorized_users", description="List all authorized command users (admin only)")
+async def list_authorized_users_slash(interaction: discord.Interaction):
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("Only admins can view authorized users.", ephemeral=True)
+        return
+    if not authorized_users:
+        await interaction.response.send_message("No authorized users set.", ephemeral=True)
+        return
+    mentions = []
+    for uid in authorized_users:
+        user = await bot.fetch_user(uid)
+        if user:
+            mentions.append(user.mention)
+        else:
+            mentions.append(f"<@{uid}>")
+    await interaction.response.send_message("Authorized users: " + ", ".join(mentions), ephemeral=True)
+
 @tree.command(name="set_checkin_message", description="Set the check-in message for a group (admin only)")
 @app_commands.describe(group="Which group to set the check-in message for", message="Check-in message text")
 async def set_checkin_message_slash(
@@ -208,7 +272,7 @@ async def set_checkin_message_slash(
     group: Literal["Product Manager", "Developer"],
     message: str
 ):
-    if not is_admin(interaction):
+    if not is_authorized(interaction):
         await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
         return
     group_map = {"Product Manager": "product_managers", "Developer": "developers"}
@@ -225,7 +289,7 @@ async def set_checkin_message_slash(
 @tree.command(name="add_to_group", description="Add a user to a group (admin only)")
 @app_commands.describe(group="Group name: product_managers or developers", user="User to add")
 async def add_to_group_slash(interaction: discord.Interaction, group: Literal["product_managers", "developers"], user: discord.User):
-    if not is_admin(interaction):
+    if not is_authorized(interaction):
         await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
         return
     group_list = product_managers if group == "product_managers" else developers
@@ -241,7 +305,7 @@ async def add_to_group_slash(interaction: discord.Interaction, group: Literal["p
 @tree.command(name="remove_from_group", description="Remove a user from a group (admin only)")
 @app_commands.describe(group="Group name: product_managers or developers", user="User to remove")
 async def remove_from_group_slash(interaction: discord.Interaction, group: Literal["product_managers", "developers"], user: discord.User):
-    if not is_admin(interaction):
+    if not is_authorized(interaction):
         await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
         return
     group_list = product_managers if group == "product_managers" else developers
@@ -257,7 +321,7 @@ async def remove_from_group_slash(interaction: discord.Interaction, group: Liter
 # --- Slash Command: List PM Group ---
 @tree.command(name="list_pm_group", description="List all users in the Product Managers group (admin only)")
 async def list_pm_group_slash(interaction: discord.Interaction):
-    if not is_admin(interaction):
+    if not is_authorized(interaction):
         await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
         return
     if not product_managers:
@@ -276,7 +340,7 @@ async def list_pm_group_slash(interaction: discord.Interaction):
 # --- Slash Command: List Developer Group ---
 @tree.command(name="list_developer_group", description="List all users in the Developers group (admin only)")
 async def list_developer_group_slash(interaction: discord.Interaction):
-    if not is_admin(interaction):
+    if not is_authorized(interaction):
         await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
         return
     if not developers:
