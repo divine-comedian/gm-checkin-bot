@@ -2,3 +2,4 @@ discord.py
 python-dotenv
 gspread
 oauth2client
+python-telegram-bot

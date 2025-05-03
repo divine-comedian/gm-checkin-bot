@@ -1,1 +1,20 @@
-{"product_managers": [], "developers": [288019500132073472, 492394339532800020, 870387465922420806]}
+{
+  "product_managers": {
+    "discord": [],
+    "telegram": [
+    
+      {
+        "id": 546190199,
+        "username": "divine_comedian"
+      }
+    ]
+  },
+  "developers": {
+    "discord": [
+      288019500132073472,
+      870387465922420806
+    ],
+    "telegram": [
+    ]
+  }
+}
