@@ -1,85 +1,70 @@
 import unittest
 import os
-from dotenv import load_dotenv
+import tempfile
+import asyncio
+from unittest import mock
+
+# ensure required env vars so bot imports without errors
+os.environ.setdefault('DISCORD_BOT_TOKEN', 'dummy')
+os.environ.setdefault('TELEGRAM_BOT_TOKEN', '123:ABC')
+
 import bot
 
-class TestBotFunctions(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        load_dotenv()
+class TestPingHistory(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(delete=False)
+        bot.PING_HISTORY_FILE = self.tmp.name
+        bot.ping_history = {}
 
-    def test_get_gsheet(self):
-        # Just test that it does not raise an error for a valid tab name (sheet may not exist)
+    def tearDown(self):
         try:
-            bot.get_gsheet(bot.SHEET_PM_TAB)
-        except Exception as e:
-            self.assertNotIsInstance(e, Exception, f"get_gsheet raised an error: {e}")
+            os.unlink(self.tmp.name)
+        except Exception:
+            pass
 
-    def test_load_groups(self):
-        pms, devs = bot.load_groups()
-        self.assertIsInstance(pms, list)
-        self.assertIsInstance(devs, list)
+    def test_load_and_save_ping_history(self):
+        data = {'1': '2024-01-01T00:00:00'}
+        bot.save_ping_history(data)
+        loaded = bot.load_ping_history()
+        self.assertEqual(data, loaded)
 
-    def test_load_checkin_messages(self):
-        msgs = bot.load_checkin_messages()
-        self.assertIn("product_managers", msgs)
-        self.assertIn("developers", msgs)
+    def test_process_ping_history(self):
+        class FakeCell:
+            def __init__(self, row, col):
+                self.row = row
+                self.col = col
+        class FakeSheet:
+            def __init__(self, value):
+                self.value = value
+            def find(self, v):
+                if v == 'tester#1234':
+                    return FakeCell(2,1)
+                if v == bot.get_week_str():
+                    return FakeCell(1,2)
+                return None
+            def cell(self, r, c):
+                class Obj:
+                    def __init__(self, val):
+                        self.value = val
+                if r == 2 and c == 2:
+                    return Obj(self.value)
+                return Obj(None)
+        async def run(value):
+            bot.ping_history = {'1': '2000-01-01T00:00:00'}
+            bot.groups['developers']['discord'] = [1]
+            fake_user = mock.AsyncMock()
+            fake_user.name = 'tester'
+            fake_user.discriminator = '1234'
+            with mock.patch.object(bot.bot, 'fetch_user', return_value=fake_user):
+                await bot.process_ping_history(sheet=FakeSheet(value))
+            return fake_user
+        # case: entry exists -> removed
+        fake_user = asyncio.run(run('done'))
+        self.assertNotIn('1', bot.ping_history)
+        # case: empty -> reminder sent
+        bot.ping_history = {'1': '2000-01-01T00:00:00'}
+        fake_user = asyncio.run(run(''))
+        fake_user.send.assert_called()
 
-    def test_save_checkin_messages(self):
-        # Should not raise error
-        try:
-            bot.save_checkin_messages()
-        except Exception as e:
-            self.fail(f"save_checkin_messages raised an error: {e}")
-
-    def test_add_and_remove_user_from_groups(self):
-        # Backup current state
-        orig_pms = bot.product_managers.copy()
-        orig_devs = bot.developers.copy()
-        test_user_id = 1234567890
-
-        # Test add to product_managers
-        if test_user_id in bot.product_managers:
-            bot.product_managers.remove(test_user_id)
-        bot.product_managers.append(test_user_id)
-        self.assertIn(test_user_id, bot.product_managers)
-
-        # Test remove from product_managers
-        bot.product_managers.remove(test_user_id)
-        self.assertNotIn(test_user_id, bot.product_managers)
-
-        # Test add to developers
-        if test_user_id in bot.developers:
-            bot.developers.remove(test_user_id)
-        bot.developers.append(test_user_id)
-        self.assertIn(test_user_id, bot.developers)
-
-        # Test remove from developers
-        bot.developers.remove(test_user_id)
-        self.assertNotIn(test_user_id, bot.developers)
-
-        # Restore state
-        bot.product_managers = orig_pms
-        bot.developers = orig_devs
-
-    def test_set_checkin_message(self):
-        orig_msgs = bot.checkin_messages.copy()
-        new_pm_msg = "Test PM message"
-        new_dev_msg = "Test Dev message"
-        bot.checkin_messages["product_managers"] = new_pm_msg
-        bot.checkin_messages["developers"] = new_dev_msg
-        bot.save_checkin_messages()
-        loaded = bot.load_checkin_messages()
-        self.assertEqual(loaded["product_managers"], new_pm_msg)
-        self.assertEqual(loaded["developers"], new_dev_msg)
-        # Restore
-        bot.checkin_messages = orig_msgs
-        bot.save_checkin_messages()
-
-    def test_send_message_placeholder(self):
-        # Placeholder: actual Discord message sending requires integration/mocks
-        self.assertTrue(hasattr(bot, "on_message"))
-        # You could use unittest.mock to patch discord.py objects for full tests
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

@@ -94,6 +94,21 @@ def save_checkin_messages():
 
 checkin_messages = load_checkin_messages()
 
+# --- Ping history persistence ---
+PING_HISTORY_FILE = "ping_history.json"
+
+def load_ping_history():
+    if os.path.exists(PING_HISTORY_FILE):
+        with open(PING_HISTORY_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_ping_history(history):
+    with open(PING_HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+ping_history = load_ping_history()
+
 # Google Sheets setup using env variables
 SHEET_NAME = "Weekly Checkins"
 SHEET_PM_TAB = "Product Managers"
@@ -259,6 +274,7 @@ async def developer_checkin_slash(interaction: discord.Interaction):
             user = await bot.fetch_user(user_id)
             if user:
                 await user.send(checkin_messages["developers"])
+                ping_history[str(user_id)] = datetime.utcnow().isoformat()
                 delivery_report.append(f"Discord {user_id}: ✅")
             else:
                 delivery_report.append(f"Discord {user_id}: ❌")
@@ -271,10 +287,12 @@ async def developer_checkin_slash(interaction: discord.Interaction):
         try:
             print(f"[TELEGRAM DEV CHECKIN] Sending to {tg_id} (@{username})")
             await telegram_bot.send_message(chat_id=tg_id, text=checkin_messages["developers"])
+            ping_history[str(tg_id)] = datetime.utcnow().isoformat()
             delivery_report.append(f"Telegram @{username if username else tg_id}: ✅")
         except Exception as e:
             print(f"[TELEGRAM DEV CHECKIN] Failed to send to {tg_id} (@{username}): {e}")
             delivery_report.append(f"Telegram @{username if username else tg_id}: ❌")
+    save_ping_history(ping_history)
     await interaction.followup.send("Developer check-in sent.\n" + "\n".join(delivery_report), ephemeral=True)
 
 
@@ -640,6 +658,86 @@ async def list_group_slash(interaction: discord.Interaction, group: Literal["pro
     await interaction.response.send_message(f"{group} group users:\n" + "\n".join(out), ephemeral=True)
 
 
+# --- Reminder processing ---
+async def process_ping_history(sheet=None):
+    if sheet is None:
+        sheet = get_gsheet(SHEET_DEV_TAB)
+    week_str = get_week_str()
+    now = datetime.utcnow()
+    to_delete = []
+    for uid, ts in list(ping_history.items()):
+        try:
+            ping_dt = datetime.fromisoformat(ts)
+        except Exception:
+            continue
+        is_discord = uid.isdigit() and int(uid) in groups["developers"]["discord"]
+        username = None
+        user_obj = None
+        if is_discord:
+            try:
+                user_obj = await bot.fetch_user(int(uid))
+                raw_username = user_obj.name
+                disc = str(getattr(user_obj, "discriminator", ""))
+                if disc == "0" or disc == "" or disc is None:
+                    username = raw_username
+                else:
+                    username = f"{raw_username}#{disc}"
+            except Exception:
+                continue
+        else:
+            username = f"telegram:{telegram_users.get(uid, uid)}"
+        try:
+            cell_user = sheet.find(username)
+            week_cell = sheet.find(week_str)
+            value = sheet.cell(cell_user.row, week_cell.col).value if cell_user and week_cell else None
+        except Exception:
+            value = None
+        if value:
+            to_delete.append(uid)
+            continue
+        if now - ping_dt > timedelta(days=3):
+            try:
+                if is_discord and user_obj:
+                    await user_obj.send(f"Reminder: {checkin_messages['developers']}")
+                else:
+                    await telegram_bot.send_message(chat_id=int(uid), text=f"Reminder: {checkin_messages['developers']}")
+                ping_history[uid] = now.isoformat()
+            except Exception:
+                pass
+    for uid in to_delete:
+        ping_history.pop(uid, None)
+    if to_delete or ping_history:
+        save_ping_history(ping_history)
+
+
+@tasks.loop(hours=24)
+async def reminder_loop():
+    await process_ping_history()
+
+
+# Optional admin commands to inspect reminder status
+@tree.command(name="view_reminder_status", description="View pending reminders (admin only)")
+async def view_reminder_status_slash(interaction: discord.Interaction):
+    if not is_authorized(interaction):
+        await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
+        return
+    if not ping_history:
+        await interaction.response.send_message("No pending reminders.", ephemeral=True)
+    else:
+        lines = [f"{uid}: {ts}" for uid, ts in ping_history.items()]
+        await interaction.response.send_message("Ping history:\n" + "\n".join(lines), ephemeral=True)
+
+
+@tree.command(name="reset_reminder_status", description="Clear all reminder status (admin only)")
+async def reset_reminder_status_slash(interaction: discord.Interaction):
+    if not is_authorized(interaction):
+        await interaction.response.send_message("You must be an admin to use this command.", ephemeral=True)
+        return
+    ping_history.clear()
+    save_ping_history(ping_history)
+    await interaction.response.send_message("Reminder status cleared.", ephemeral=True)
+
+
 # Update the on_ready event
 @bot.event
 async def on_ready():
@@ -655,6 +753,8 @@ async def on_ready():
         print(f"Synced {len(synced)} slash commands to guild {GUILD_ID}.")
     except Exception as e:
         print(f"Failed to sync slash commands: {e}")
+    if not reminder_loop.is_running():
+        reminder_loop.start()
 
 if __name__ == "__main__":
     import asyncio
