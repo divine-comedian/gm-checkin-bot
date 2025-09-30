@@ -107,7 +107,16 @@ tree = bot.tree
 
 # --- Telegram bot setup ---
 telegram_bot = TelegramBot(token=TELEGRAM_BOT_TOKEN)
-telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+# Configure connection pool and timeouts for better reliability
+from telegram.request import HTTPXRequest
+request = HTTPXRequest(
+    connection_pool_size=8,
+    connect_timeout=15.0,  # Longer timeout for initial connection
+    read_timeout=30.0,     # Longer timeout for read operations
+    write_timeout=30.0,    # Longer timeout for write operations
+    pool_timeout=3.0,
+)
+telegram_app = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request).build()
 
 # --- Telegram message handler for check-ins ---
 async def telegram_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -658,17 +667,64 @@ async def on_ready():
 
 if __name__ == "__main__":
     import asyncio
+    from telegram.error import TimedOut, NetworkError, RetryAfter
+    import os
+
     async def main():
         # Start Discord bot as a task
         discord_task = asyncio.create_task(bot.start(DISCORD_BOT_TOKEN))
-        # Start Telegram bot using async API (no run_polling)
-        await telegram_app.initialize()
-        await telegram_app.start()
-        await telegram_app.updater.start_polling()
+        
+        # Check if Telegram should be disabled
+        disable_telegram = os.environ.get("DISABLE_TELEGRAM", "").lower() in ("true", "1", "yes")
+        if disable_telegram:
+            print("Telegram support disabled via environment variable.")
+            telegram_started = False
+        else:
+            # Start Telegram bot with retry logic
+            max_retries = int(os.environ.get("TELEGRAM_MAX_RETRIES", "5"))
+            retry_delay = int(os.environ.get("TELEGRAM_RETRY_DELAY", "5"))
+            continue_on_error = os.environ.get("TELEGRAM_CONTINUE_ON_ERROR", "").lower() in ("true", "1", "yes")
+            telegram_started = False
+            
+            for attempt in range(max_retries):
+                try:
+                    print(f"Initializing Telegram bot (attempt {attempt+1}/{max_retries})...")
+                    await telegram_app.initialize()
+                    await telegram_app.start()
+                    # Only start polling if initialization was successful
+                    await telegram_app.updater.start_polling(drop_pending_updates=True)
+                    print("Telegram bot successfully started!")
+                    telegram_started = True
+                    break
+                except (TimedOut, NetworkError, RetryAfter) as e:
+                    if attempt < max_retries - 1:
+                        wait_time = retry_delay * (attempt + 1)
+                        print(f"Telegram connection error: {e}. Retrying in {wait_time} seconds...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        print(f"Failed to connect to Telegram API after {max_retries} attempts. Running without Telegram support.")
+                        if not continue_on_error:
+                            print("Exiting due to Telegram initialization failure.")
+                            return
+                except Exception as e:
+                    print(f"Unexpected error initializing Telegram bot: {e}")
+                    print("Running without Telegram support.")
+                    if not continue_on_error:
+                        print("Exiting due to Telegram initialization failure.")
+                        return
+                    break
+        
         try:
-            await discord_task  # Run Discord bot until it exits
+            # Run Discord bot until it exits
+            await discord_task
         finally:
-            await telegram_app.updater.stop()
-            await telegram_app.stop()
-            await telegram_app.shutdown()
+            # Only try to shut down Telegram if it was successfully started
+            if telegram_started:
+                try:
+                    await telegram_app.updater.stop()
+                    await telegram_app.stop()
+                    await telegram_app.shutdown()
+                except Exception as e:
+                    print(f"Error shutting down Telegram bot: {e}")
+    
     asyncio.run(main())

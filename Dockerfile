@@ -14,9 +14,13 @@ RUN groupadd -r botuser && useradd -r -g botuser botuser
 
 # Install dependencies and git
 COPY requirements.txt ./
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates procps \
     && pip install --no-cache-dir -r requirements.txt \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Create data and log directories and set permissions
+RUN mkdir -p /app/data /app/logs && \
+    chown -R botuser:botuser /app
 
 # Copy source code and update script
 COPY --chown=botuser:botuser . .

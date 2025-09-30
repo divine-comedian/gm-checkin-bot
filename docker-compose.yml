@@ -10,6 +10,8 @@ services:
     volumes:
       # Persist data files
       - ./data:/app/data
+      # Persist logs
+      - ./logs:/app/logs
       # Mount .env file for environment variables
       - ./.env:/app/.env:ro
     environment:
@@ -18,6 +20,9 @@ services:
       - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
       # Telegram configuration
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_MAX_RETRIES=3
+      - TELEGRAM_RETRY_DELAY=5
+      - TELEGRAM_CONTINUE_ON_ERROR=true
       # Google Sheets API credentials
       - GOOGLE_TYPE=${GOOGLE_TYPE}
       - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}

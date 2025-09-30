@@ -1,4 +1,43 @@
+# Environment and credentials
 .env
-venv/
 google-credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+
+# Data directory (persistent storage)
+data/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project specific
 PRD.md
+context/
