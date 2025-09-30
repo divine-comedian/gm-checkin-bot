@@ -12,6 +12,16 @@ from typing import Literal
 # --- Telegram imports ---
 from telegram import Update, Bot as TelegramBot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+# --- Supabase DB helpers ---
+from db import (
+    get_or_create_user,
+    add_checkin,
+    add_user_to_group,
+    get_user_groups,
+    get_checkin_messages,
+    set_checkin_message,
+    is_user_in_group
+)
 
 GROUPS_FILE = "groups.json"
 AUTHORIZED_USERS_FILE = "authorized_users.json"
@@ -115,100 +125,57 @@ async def telegram_message_handler(update: Update, context: ContextTypes.DEFAULT
     tg_id = user.id
     text = update.message.text
     print(f"[TELEGRAM CHECKIN] Received from {tg_id} (@{user.username}): {text}")
-    # No auto-registration here
-    # Find group membership (now objects)
-    tab = None
-    user_obj_pm = next((u for u in groups["product_managers"]["telegram"] if u["id"] == tg_id), None)
-    user_obj_dev = next((u for u in groups["developers"]["telegram"] if u["id"] == tg_id), None)
-    if user_obj_pm:
-        tab = SHEET_PM_TAB
-        username = f"telegram:{user.username or tg_id}"
-    elif user_obj_dev:
-        tab = SHEET_DEV_TAB
-        username = f"telegram:{user.username or tg_id}"
-    else:
-        await context.bot.send_message(chat_id=tg_id, text="You are not in a group.")
-        print(f"[TELEGRAM CHECKIN] User {tg_id} not in any group.")
+    # Supabase integration
+    user_row = get_or_create_user(telegram_id=tg_id, telegram_username=user.username)
+    if not user_row:
+        await update.message.reply_text("Could not find or create your user in the database. Please contact an admin.")
         return
-    try:
-        sheet = get_gsheet(tab)
-        week_str = get_week_str()
-        print(f"[TELEGRAM CHECKIN] Recording for {username} in {tab} at {week_str}")
-        # Find row for user
-        cell = sheet.find(username)
-        if not cell:
-            print(f"[TELEGRAM CHECKIN] Username {username} not found in sheet {tab}, adding new row.")
-            # Find first empty row
-            rows = sheet.get_all_values()
-            row = len(rows) + 1
-            # Insert username in first column
-            sheet.update_cell(row, 1, username)
-        else:
-            row = cell.row
-        # Find column for week
-        week_cell = sheet.find(week_str)
-        if not week_cell:
-            print(f"[TELEGRAM CHECKIN] Week {week_str} not found in sheet {tab}, adding new column.")
-            # Get all values to determine where to add the new column
-            values = sheet.get_all_values()
-            header = values[0] if values else []
-            col = len(header) + 1
-            sheet.update_cell(1, col, week_str)
-        else:
-            col = week_cell.col
-        existing = sheet.cell(row, col).value
-        if existing:
-            new_value = existing + "\n" + text
-        else:
-            new_value = text
-        sheet.update_cell(row, col, new_value)
-        # React to the user's message with the 👌 emoji using set_message_reaction (python-telegram-bot v20+)
-        from telegram import ReactionTypeEmoji
-        reacted = False
-        for emoji in ["👌", "👀"]:
-            try:
-                await context.bot.set_message_reaction(
-                    chat_id=update.effective_message.chat_id,
-                    message_id=update.effective_message.message_id,
-                    reaction=[ReactionTypeEmoji(emoji)],
-                    is_big=False
-                )
-                reacted = True
-                break
-            except Exception as e:
-                print(f"[TELEGRAM CHECKIN] Failed to react with {emoji}: {e}")
-                continue
-        if not reacted:
-            try:
-                await update.message.reply_text("Check-in recorded!")
-            except Exception:
-                pass
-        print(f"[TELEGRAM CHECKIN] Successfully recorded check-in for {username} in {tab}")
-    except Exception as e:
-        print(f"[TELEGRAM CHECKIN] Failed to record check-in for {username}: {e}")
-        try:
-            await update.message.reply_text("There was an error recording your check-in. Please contact the admin.")
-        except Exception:
-            pass
+    user_groups_db = get_user_groups(user_row['id'])
+    if not user_groups_db:
+        await update.message.reply_text("You are not registered in any group. Please contact an admin.")
+        return
+    # Use first group for check-in (or customize as needed)
+    group_info = user_groups_db[0]
+    group_name = group_info['groups']['name'] if 'groups' in group_info and 'name' in group_info['groups'] else None
+    if not group_name:
+        await update.message.reply_text("Could not determine your group. Please contact an admin.")
+        return
+    week_str = get_week_str()
+    checkin_result = add_checkin(user_id=user_row['id'], group_name=group_name, message=text, week_str=week_str)
+    if checkin_result.get('status') == 'duplicate':
+        await update.message.reply_text("You have already checked in for this week.")
+        return
+    elif checkin_result.get('status') == 'error':
+        await update.message.reply_text(f"Error: {checkin_result.get('message','Unknown error')}")
+        return
+    await update.message.reply_text(f"Check-in received for {group_name.replace('_', ' ')}! Thank you.")
+    # Legacy Google Sheets code is still present below for migration/cross-checking (deprecated)
+    # --- DEPRECATED: Legacy Google Sheets storage ---
+    # tab = SHEET_PM_TAB if group == "product_managers" else SHEET_DEV_TAB
+    # now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # row = [now, f"@{user.username}", text, week_str]
+    # sheet = get_gsheet(tab)
+    # sheet.append_row(row)
 
 # --- Telegram /register command handler ---
 async def telegram_register_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     tg_id = user.id
     username = user.username
-    global telegram_users
-    print(f"[TELEGRAM REGISTER] User: {username}, ID: {tg_id}")
+    # Supabase registration
+    user_row = get_or_create_user(telegram_id=tg_id, telegram_username=username)
+    if not user_row:
+        await update.message.reply_text("Could not register you in the database. Please contact an admin.")
+        return
+    await update.message.reply_text(f"Registered @{username} (ID: {tg_id}) in Supabase!")
+    # Legacy registration is still present below for migration/cross-checking (deprecated)
+    # telegram_users[str(tg_id)] = username
+    # save_telegram_users(telegram_users)
     if not username:
         print(f"[TELEGRAM REGISTER] User {tg_id} has no username set.")
         await context.bot.send_message(chat_id=tg_id, text="You must set a Telegram username in your profile to register with the bot.")
         return
     telegram_users[str(tg_id)] = username
-    save_telegram_users(telegram_users)
-    try:
-        print(f"[TELEGRAM REGISTER] Sending confirmation to {tg_id} (@{username})")
-        await context.bot.send_message(chat_id=tg_id, text=f"Registered! Username: @{username}, ID: {tg_id}")
-    except Exception as e:
-        print(f"[TELEGRAM REGISTER] Failed to send confirmation to {tg_id}: {e}")
 
 # Register /register command for Telegram
 from telegram.ext import CommandHandler, MessageHandler, filters
@@ -259,11 +226,11 @@ async def developer_checkin_slash(interaction: discord.Interaction):
             user = await bot.fetch_user(user_id)
             if user:
                 await user.send(checkin_messages["developers"])
-                delivery_report.append(f"Discord {user_id}: ✅")
+                delivery_report.append(f"Discord {user_id}: ")
             else:
-                delivery_report.append(f"Discord {user_id}: ❌")
+                delivery_report.append(f"Discord {user_id}: ")
         except Exception:
-            delivery_report.append(f"Discord {user_id}: ❌")
+            delivery_report.append(f"Discord {user_id}: ")
     # Telegram delivery
     for tg_user in groups["developers"]["telegram"]:
         tg_id = tg_user["id"] if isinstance(tg_user, dict) else tg_user
@@ -271,10 +238,10 @@ async def developer_checkin_slash(interaction: discord.Interaction):
         try:
             print(f"[TELEGRAM DEV CHECKIN] Sending to {tg_id} (@{username})")
             await telegram_bot.send_message(chat_id=tg_id, text=checkin_messages["developers"])
-            delivery_report.append(f"Telegram @{username if username else tg_id}: ✅")
+            delivery_report.append(f"Telegram @{username if username else tg_id}: ")
         except Exception as e:
             print(f"[TELEGRAM DEV CHECKIN] Failed to send to {tg_id} (@{username}): {e}")
-            delivery_report.append(f"Telegram @{username if username else tg_id}: ❌")
+            delivery_report.append(f"Telegram @{username if username else tg_id}: ")
     await interaction.followup.send("Developer check-in sent.\n" + "\n".join(delivery_report), ephemeral=True)
 
 
@@ -293,11 +260,11 @@ async def pm_checkin_slash(interaction: discord.Interaction):
             user = await bot.fetch_user(user_id)
             if user:
                 await user.send(checkin_messages["product_managers"])
-                delivery_report.append(f"Discord {user_id}: ✅")
+                delivery_report.append(f"Discord {user_id}: ")
             else:
-                delivery_report.append(f"Discord {user_id}: ❌")
+                delivery_report.append(f"Discord {user_id}: ")
         except Exception:
-            delivery_report.append(f"Discord {user_id}: ❌")
+            delivery_report.append(f"Discord {user_id}: ")
     # Telegram delivery
     for tg_user in groups["product_managers"]["telegram"]:
         tg_id = tg_user["id"] if isinstance(tg_user, dict) else tg_user
@@ -305,10 +272,10 @@ async def pm_checkin_slash(interaction: discord.Interaction):
         try:
             print(f"[TELEGRAM PM CHECKIN] Sending to {tg_id} (@{username})")
             await telegram_bot.send_message(chat_id=tg_id, text=checkin_messages["product_managers"])
-            delivery_report.append(f"Telegram @{username if username else tg_id}: ✅")
+            delivery_report.append(f"Telegram @{username if username else tg_id}: ")
         except Exception as e:
             print(f"[TELEGRAM PM CHECKIN] Failed to send to {tg_id} (@{username}): {e}")
-            delivery_report.append(f"Telegram @{username if username else tg_id}: ❌")
+            delivery_report.append(f"Telegram @{username if username else tg_id}: ")
     await interaction.followup.send("Product manager check-in sent.\n" + "\n".join(delivery_report), ephemeral=True)
 
 
@@ -339,53 +306,35 @@ async def on_message(message):
     else:
         username = f"{raw_username}#{discriminator}"
     print(f"[DISCORD CHECKIN] DM from {username} (id={user_id}) for week '{week_str}': {message.content}")
-    try:
-        sheet = get_gsheet(tab)
-        # Find or add user row
-        values = sheet.get_all_values()
-        header = values[0] if values else []
-        row = None
-        for i in range(1, len(values)):
-            sheet_name = values[i][0] if values[i] else ""
-            # Compare ignoring '#0' discriminator
-            sheet_name_trimmed = sheet_name if not sheet_name.endswith('#0') else sheet_name[:-2]
-            if sheet_name_trimmed == raw_username or sheet_name == username:
-                row = i + 1  # 1-based
-                print(f"[DISCORD CHECKIN] Found row {row} for user {sheet_name}")
-                break
-        if row is None:
-            row = len(values) + 1
-            sheet.update_cell(row, 1, username)
-            print(f"[DISCORD CHECKIN] Added new row {row} for user {username}")
-        # Find or add week column
-        col = None
-        if week_str in header:
-            col = header.index(week_str) + 1
-            print(f"[DISCORD CHECKIN] Found column {col} for week {week_str}")
-        else:
-            col = len(header) + 1
-            sheet.update_cell(1, col, week_str)
-            print(f"[DISCORD CHECKIN] Added new column {col} for week {week_str}")
-        # Write message content
-        if col == 1 or row == 1:
-            await message.channel.send("Internal error: refusing to write message to username column or header row.")
-            print(f"[DISCORD CHECKIN] Refused to write to col={col}, row={row}")
-            return
-        existing = sheet.cell(row, col).value
-        if existing:
-            new_value = existing + "\n" + message.content
-        else:
-            new_value = message.content
-        sheet.update_cell(row, col, new_value)
-        print(f"[DISCORD CHECKIN] Updated cell ({row}, {col}) for {username}")
-        await message.add_reaction("✅")
-    except gspread.SpreadsheetNotFound:
-        await message.channel.send("Sorry, the check-in spreadsheet could not be found. Please contact the admin.")
-        print(f"[DISCORD CHECKIN] Spreadsheet not found for {username}")
+    # Supabase integration
+    user_row = get_or_create_user(discord_id=user_id, discord_username=username)
+    if not user_row:
+        await message.channel.send("Could not find or create your user in the database. Please contact an admin.")
         return
-    except Exception as e:
-        await message.channel.send("There was an error recording your check-in. Please contact the admin.")
-        print(f"[DISCORD CHECKIN] Error for {username}: {e}")
+    user_groups_db = get_user_groups(user_row['id'])
+    if not user_groups_db:
+        await message.channel.send("You are not registered in any group. Please contact an admin.")
+        return
+    group_info = user_groups_db[0]
+    group_name = group_info['groups']['name'] if 'groups' in group_info and 'name' in group_info['groups'] else None
+    if not group_name:
+        await message.channel.send("Could not determine your group. Please contact an admin.")
+        return
+    checkin_result = add_checkin(user_id=user_row['id'], group_name=group_name, message=message.content, week_str=week_str)
+    if checkin_result.get('status') == 'duplicate':
+        await message.channel.send("You have already checked in for this week.")
+        return
+    elif checkin_result.get('status') == 'error':
+        await message.channel.send(f"Error: {checkin_result.get('message','Unknown error')}")
+        return
+    await message.channel.send(f"Check-in received for {group_name.replace('_', ' ')}! Thank you.")
+    # Legacy Google Sheets code is still present below for migration/cross-checking (deprecated)
+    # --- DEPRECATED: Legacy Google Sheets storage ---
+    # tab = SHEET_PM_TAB if group == "product_managers" else SHEET_DEV_TAB
+    # now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # row = [now, f"@{message.author.name}", message.content, week_str]
+    # sheet = get_gsheet(tab)
+    # sheet.append_row(row)
     await bot.process_commands(message)
 
 

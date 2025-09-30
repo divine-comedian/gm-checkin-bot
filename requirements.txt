@@ -3,3 +3,5 @@ python-dotenv
 gspread
 oauth2client
 python-telegram-bot
+supabase
+python-dateutil  # For date handling
