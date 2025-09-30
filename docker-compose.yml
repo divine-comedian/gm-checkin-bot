@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gm-checkin-bot
+    restart: unless-stopped
+    volumes:
+      # Persist data files
+      - ./data:/app/data
+      # Mount .env file for environment variables
+      - ./.env:/app/.env:ro
+    environment:
+      # Discord configuration
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      # Telegram configuration
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      # Google Sheets API credentials
+      - GOOGLE_TYPE=${GOOGLE_TYPE}
+      - GOOGLE_PROJECT_ID=${GOOGLE_PROJECT_ID}
+      - GOOGLE_PRIVATE_KEY_ID=${GOOGLE_PRIVATE_KEY_ID}
+      - GOOGLE_PRIVATE_KEY=${GOOGLE_PRIVATE_KEY}
+      - GOOGLE_CLIENT_EMAIL=${GOOGLE_CLIENT_EMAIL}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_AUTH_URI=${GOOGLE_AUTH_URI}
+      - GOOGLE_TOKEN_URI=${GOOGLE_TOKEN_URI}
+      - GOOGLE_AUTH_PROVIDER_X509_CERT_URL=${GOOGLE_AUTH_PROVIDER_X509_CERT_URL}
+      - GOOGLE_CLIENT_X509_CERT_URL=${GOOGLE_CLIENT_X509_CERT_URL}
+      - GOOGLE_UNIVERSE_DOMAIN=${GOOGLE_UNIVERSE_DOMAIN}
+    healthcheck:
+      test: ["CMD", "ps", "aux", "|", "grep", "-q", "[p]ython bot.py"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Uncomment the following lines if you want to use a specific network
+    # networks:
+    #   - bot-network
+
+# Uncomment the following lines if you want to use a specific network
+# networks:
+#   bot-network:
+#     driver: bridge

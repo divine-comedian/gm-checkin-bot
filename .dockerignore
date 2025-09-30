@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 venv/
 *.pyc
@@ -7,6 +8,37 @@ venv/
 env/
 build/
 dist/
+*.so
+*.egg
+*.egg-info/
+
+# Git
 .git/
 .gitignore
+
+# Credentials and environment
 google-credentials.json
+.env
+*.pem
+*.key
+
+# Data files (will be mounted as volume)
+data/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+.dockerignore
+docker-compose.yml
+
+# Logs
+*.log
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
