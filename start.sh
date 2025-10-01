@@ -1,31 +1,19 @@
 #!/bin/bash
 
-REPO_DIR=/app
-DATA_DIR=${REPO_DIR}/data
-LOGS_DIR=${REPO_DIR}/logs
-BRANCH=main
+# Set variables
+DATA_DIR=/app/data
+LOGS_DIR=/app/logs
 
-# Ensure data directory exists
+# Ensure directories exist
 mkdir -p ${DATA_DIR} ${LOGS_DIR}
 
-# Setup data files in the persistent data directory
+# Initialize data files if they don't exist
 for file in groups.json authorized_users.json checkin_messages.json telegram_users.json; do
-  # If the file exists in the repo but not in data dir, copy it
-  if [ -f "${REPO_DIR}/${file}" ] && [ ! -f "${DATA_DIR}/${file}" ]; then
+  if [ -f "/app/${file}" ] && [ ! -f "${DATA_DIR}/${file}" ]; then
     echo "Initializing ${file} in data directory..."
-    cp "${REPO_DIR}/${file}" "${DATA_DIR}/${file}"
-  fi
-  
-  # Create symbolic links from data dir to repo files
-  # This ensures the bot reads from the repo files directly
-  if [ -f "${REPO_DIR}/${file}" ]; then
-    echo "Using ${file} from repository..."
-    # Make sure data directory has a backup copy
-    cp "${REPO_DIR}/${file}" "${DATA_DIR}/${file}.backup"
+    cp "/app/${file}" "${DATA_DIR}/${file}"
   fi
 done
-
-cd $REPO_DIR
 
 # Function to handle exit
 cleanup() {
@@ -39,16 +27,17 @@ cleanup() {
 # Register the cleanup function for these signals
 trap cleanup SIGTERM SIGINT SIGHUP
 
-# Start the bot initially
-echo "Starting bot.py..."
+# Set Telegram to continue on error
 export TELEGRAM_MAX_RETRIES=3
 export TELEGRAM_RETRY_DELAY=5
 export TELEGRAM_CONTINUE_ON_ERROR=true
 
-# Use the logs directory for output
+# Start the bot
+echo "Starting bot.py..."
 python bot.py > ${LOGS_DIR}/bot.log 2>&1 &
 BOT_PID=$!
 
+# Check if bot started successfully
 sleep 5
 if ! ps -p $BOT_PID > /dev/null; then
   echo "Failed to start bot.py, checking logs..."
@@ -68,6 +57,7 @@ fi
 
 echo "Bot started with PID: $BOT_PID"
 
+# Monitor the bot and restart if it crashes
 while true; do
   # Check if the bot process is still running
   if ! ps -p $BOT_PID > /dev/null; then
